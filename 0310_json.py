@@ -6,6 +6,7 @@ import base64  # 이미지 인코딩을 위한 base64 모듈 임포트
 import json  # JSON 파일 처리를 위한 json 모듈 임포트
 from dotenv import load_dotenv  # .env 파일의 환경변수를 로드하기 위한 함수 임포트
 from pinecone import Pinecone, ServerlessSpec  # 최신 Pinecone API 사용
+import hashlib  # 파일 해시 계산을 위한 모듈
 
 # .env 파일에 저장된 환경변수 로드
 load_dotenv()
@@ -51,16 +52,40 @@ if index_name not in [idx.name for idx in pc.list_indexes()]:
 index = pc.Index(index_name)
 
 ##########################################
-# OpenAI 임베딩 함수 정의
+# OpenAI 임베딩 함수 정의 (text-embedding-3-large 사용)
 ##########################################
 def get_embedding(text):
     response = openai.embeddings.create(input=[text], model="text-embedding-ada-002")
     return response.data[0].embedding
 
 ##########################################
-# test.json 파일을 Pinecone에 인덱싱
+# test.json 파일을 Pinecone에 인덱싱 (변경된 경우에만)
 ##########################################
-if "pinecone_indexed" not in st.session_state:
+def get_file_hash(filename):
+    """파일의 SHA-256 해시값을 계산합니다."""
+    h = hashlib.sha256()
+    with open(filename, 'rb') as f:
+        h.update(f.read())
+    return h.hexdigest()
+
+def load_stored_hash(hash_file):
+    """저장된 해시값을 읽어옵니다."""
+    try:
+        with open(hash_file, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return None
+
+def save_hash(hash_file, hash_value):
+    """해시값을 파일에 저장합니다."""
+    with open(hash_file, "w", encoding="utf-8") as f:
+        f.write(hash_value)
+
+hash_file = "test.json.hash"
+current_hash = get_file_hash("test.json")
+stored_hash = load_stored_hash(hash_file)
+
+if stored_hash != current_hash:
     with open("test.json", "r", encoding="utf-8") as f:
         test_data = json.load(f)
     vectors = []
@@ -92,7 +117,10 @@ if "pinecone_indexed" not in st.session_state:
             }
             vectors.append((doc_id, embedding, metadata))
     index.upsert(vectors=vectors)
-    st.session_state["pinecone_indexed"] = True
+    save_hash(hash_file, current_hash)
+    st.write("Pinecone에 새 데이터를 인덱싱했습니다.")
+else:
+    st.write("test.json 파일에 변경이 없으므로, 기존 인덱스를 사용합니다.")
 
 ##########################################
 # 대화 기록 초기화 및 기존 대화 출력
@@ -110,7 +138,7 @@ for message in st.session_state.messages:
 def ask_chatgpt_stream(question, pinecone_context):
     try:
         system_message = (
-            "너는 벤츠 S-class 사용 메뉴얼에 대해 전문가야. "
+            "너는 벤츠 S-class 사용 매뉴얼에 대해 전문가야. "
             "아래는 관련 매뉴얼 정보입니다:\n" + pinecone_context
         )
         conversation = [{"role": "system", "content": system_message}]
@@ -170,7 +198,6 @@ if prompt or uploaded_image:
             f"Section: {metadata.get('section_title', '')}\n"
             f"Content: {metadata.get('content', '')}\n\n"
         )
-        # 만약 이미지 경로가 있다면 첫 번째 이미지를 저장
         if not displayed_image and "image_paths" in metadata and metadata["image_paths"]:
             displayed_image = metadata["image_paths"][0]
     
@@ -179,7 +206,6 @@ if prompt or uploaded_image:
     ##########################################
     with st.chat_message("assistant"):
         response = ask_chatgpt_stream(combined_prompt, pinecone_context)
-        # 만약 관련 이미지가 있으면 ChatGPT 응답 아래에 표시
         if displayed_image:
             st.image(displayed_image, caption="관련 이미지", use_container_width=True)
     st.session_state.messages.append({"role": "assistant", "content": response})

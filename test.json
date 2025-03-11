@@ -453,7 +453,6 @@
                             "Ù 뒤차축 스티어링(노란색)( / 830쪽)",
                             "Ù 뒤차축 스티어링(빨간색)( / 830쪽)",
                             "표시 메시지와 경고등 및 표시등 경고등 및 표시등",
-                            "https://kcc-llm.s3.ap-northeast-2.amazonaws.com/vehicle+instrument+panel.png",
                             "827",
                             "제동",
                             "! 전동식 주차 브레이크(노란색) ( / 831쪽)",
@@ -488,6 +487,7 @@
                             "L 후방 교차 충돌 경고( / 424쪽)",
                             "º 조향 제동( / 425쪽)",
                             "표시 메시지와 경고등 및 표시등 경고등 및 표시등",
+                            "https://kcc-llm.s3.ap-northeast-2.amazonaws.com/vehicle+instrument+panel.png",
                             "828"
                         ]
                     },
