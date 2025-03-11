@@ -7,6 +7,10 @@ import json  # JSON 파일 처리를 위한 json 모듈 임포트
 from dotenv import load_dotenv  # .env 파일의 환경변수를 로드하기 위한 함수 임포트
 from pinecone import Pinecone, ServerlessSpec  # 최신 Pinecone API 사용
 import hashlib  # 파일 해시 계산을 위한 모듈
+import tempfile
+import io  # 메모리 내 파일 객체 생성을 위한 모듈
+from st_audiorec import st_audiorec
+from gtts import gTTS  # 텍스트를 음성으로 변환하기 위한 gTTS 라이브러리
 
 # .env 파일에 저장된 환경변수 로드
 load_dotenv()
@@ -18,6 +22,11 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 # 메인 타이틀 및 캡션 설정
 st.title("KCC Auto Manager 🚗")
 st.caption("자동차 사용 매뉴얼 및 서비스 센터 위치 찾기를 도와드립니다!")
+
+if "recording" not in st.session_state:
+    st.session_state.recording = False
+
+toggle_label = "음성 인식 중지" if st.session_state.recording else "음성 인식 시작"
 
 ##########################################
 # 사이드바 디자인: 현재 차량, 대화 이력 등
@@ -52,7 +61,7 @@ if index_name not in [idx.name for idx in pc.list_indexes()]:
 index = pc.Index(index_name)
 
 ##########################################
-# OpenAI 임베딩 함수 정의 (text-embedding-3-large 사용)
+# OpenAI 임베딩 함수 정의 (text-embedding-ada-002 사용)
 ##########################################
 def get_embedding(text):
     response = openai.embeddings.create(input=[text], model="text-embedding-ada-002")
@@ -164,48 +173,106 @@ def ask_chatgpt_stream(question, pinecone_context):
         return ""
 
 ##########################################
-# 사용자 입력 처리 (텍스트 입력 및 이미지 업로더)
+# 사용자 입력 처리 (텍스트 입력, 이미지 업로더, 음성 녹음)
 ##########################################
 prompt = st.chat_input("메시지를 입력하세요")
 uploaded_image = st.file_uploader("이미지를 첨부하세요", type=["png", "jpg", "jpeg", "gif"])
 
-if prompt or uploaded_image:
-    combined_prompt = prompt if prompt else ""
-    if uploaded_image is not None:
-        image_bytes = uploaded_image.read()
-        image_type = uploaded_image.type
-        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-        # 필요 시 이미지 데이터 URL을 combined_prompt에 추가 가능:
-        # combined_prompt += f"\n\n첨부된 이미지: data:{image_type};base64,{image_base64}"
+# 음성 녹음 토글 버튼
+if st.button(toggle_label):
+    st.session_state.recording = not st.session_state.recording
+
+# 녹음 상태가 활성화되면 st_audiorec 컴포넌트를 보여줌
+if st.session_state.recording:
+    st.info("녹음 중입니다. 다시 버튼을 누르면 녹음이 종료됩니다.")
+    # st_audiorec는 녹음이 완료되면 audio_bytes (wav 형식의 bytes)를 반환합니다.
+    audio_bytes = st_audiorec()
     
-    st.session_state.messages.append({"role": "user", "content": combined_prompt})
-    with st.chat_message("user"):
-        if prompt:
-            st.markdown(prompt)
+    # 녹음이 완료되어 audio_bytes가 반환되면 처리
+    if audio_bytes is not None:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(audio_bytes)
+            tmp.flush()
+            tmp_path = tmp.name
+        
+        # Whisper API를 통해 오디오 파일 전사 (텍스트 변환)
+        with open(tmp_path, "rb") as audio_file:
+            transcript_result = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file
+            )
+        os.remove(tmp_path)
+        
+        transcript = transcript_result.text
+        st.success("음성 인식 결과:")
+        st.write(transcript)
+        # 음성 전사 결과를 세션에 저장
+        st.session_state.voice_transcript = transcript
+        st.session_state.messages.append({"role": "user", "content": transcript})
+        with st.chat_message("user"):
+            st.markdown(transcript)
+        st.session_state.recording = False
+
+# 텍스트 입력, 이미지 업로드, 또는 음성 전사된 텍스트가 있을 경우 처리
+if prompt or uploaded_image or st.session_state.get("voice_transcript"):
+    # 음성 전사가 있다면 우선 사용, 없으면 prompt 사용
+    combined_prompt = prompt if prompt else st.session_state.get("voice_transcript", "")
+    
+    # (1) 실제로 combined_prompt가 비어있지 않을 때만 처리
+    if combined_prompt.strip():
+        # 이미지 업로드 시 (옵션)
         if uploaded_image is not None:
-            st.image(uploaded_image, width=150, caption="첨부된 이미지")
+            image_bytes = uploaded_image.read()
+            image_type = uploaded_image.type
+            image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+            # 필요 시 이미지 데이터 URL을 combined_prompt에 추가 가능:
+            # combined_prompt += f"\n\n첨부된 이미지: data:{image_type};base64,{image_base64}"
+        
+        # 사용자 메시지 추가
+        st.session_state.messages.append({"role": "user", "content": combined_prompt})
+        with st.chat_message("user"):
+            # 텍스트 표시
+            if prompt:
+                st.markdown(prompt)
+            # 이미지 표시
+            if uploaded_image is not None:
+                st.image(uploaded_image, width=150, caption="첨부된 이미지")
+        
+        ##########################################
+        # Pinecone DB 검색
+        ##########################################
+        query_embedding = get_embedding(combined_prompt)
+        results = index.query(vector=query_embedding, top_k=3, include_metadata=True)
+        pinecone_context = ""
+        displayed_image = None  # 관련 이미지를 저장할 변수
+        for match in results["matches"]:
+            metadata = match["metadata"]
+            pinecone_context += (
+                f"Section: {metadata.get('section_title', '')}\n"
+                f"Content: {metadata.get('content', '')}\n\n"
+            )
+            if not displayed_image and "image_paths" in metadata and metadata["image_paths"]:
+                displayed_image = metadata["image_paths"][0]
+        
+        ##########################################
+        # ChatGPT에 질문 전송 및 응답 처리
+        ##########################################
+        with st.chat_message("assistant"):
+            response = ask_chatgpt_stream(combined_prompt, pinecone_context)
+            # 음성로 답변을 듣기 위한 TTS 변환 추가
+            if response.strip():
+                try:
+                    tts = gTTS(response, lang='ko')
+                    audio_fp = io.BytesIO()
+                    tts.write_to_fp(audio_fp)
+                    audio_fp.seek(0)
+                    st.audio(audio_fp, format="audio/mp3")
+                except Exception as tts_error:
+                    st.error(f"TTS 에러: {tts_error}")
+            if displayed_image:
+                st.image(displayed_image, caption="관련 이미지", use_container_width=True)
+        st.session_state.messages.append({"role": "assistant", "content": response})
     
-    ##########################################
-    # Pinecone DB 검색
-    ##########################################
-    query_embedding = get_embedding(combined_prompt)
-    results = index.query(vector=query_embedding, top_k=3, include_metadata=True)
-    pinecone_context = ""
-    displayed_image = None  # 관련 이미지를 저장할 변수
-    for match in results["matches"]:
-        metadata = match["metadata"]
-        pinecone_context += (
-            f"Section: {metadata.get('section_title', '')}\n"
-            f"Content: {metadata.get('content', '')}\n\n"
-        )
-        if not displayed_image and "image_paths" in metadata and metadata["image_paths"]:
-            displayed_image = metadata["image_paths"][0]
-    
-    ##########################################
-    # ChatGPT에 질문 전송 및 응답 처리
-    ##########################################
-    with st.chat_message("assistant"):
-        response = ask_chatgpt_stream(combined_prompt, pinecone_context)
-        if displayed_image:
-            st.image(displayed_image, caption="관련 이미지", use_container_width=True)
-    st.session_state.messages.append({"role": "assistant", "content": response})
+    # (2) 전송 후 음성 전사 내용 초기화
+    if st.session_state.get("voice_transcript"):
+        del st.session_state["voice_transcript"]
