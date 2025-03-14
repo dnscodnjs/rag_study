@@ -20,7 +20,6 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 st.set_page_config(page_title="KCC Auto Manager 🚗", layout="wide")
 st.title("KCC Auto Manager 🚗")
-#st.caption("자동차 사용 매뉴얼 및 서비스 센터 위치 찾기를 도와드립니다!")
 
 # 기본 헤더, 푸터, 메뉴 숨기기
 hide_streamlit_style = """
@@ -32,28 +31,21 @@ hide_streamlit_style = """
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-
 # session_state 초기화
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "input_counter" not in st.session_state:
     st.session_state.input_counter = 0  # 각 질문마다 새로운 위젯 key 생성
 
-def clear_conversation():
-    st.session_state.messages = []
-    st.success("대화 기록이 초기화되었습니다.")
-
+# 사이드바 (대화 이력 부분 삭제, 설정/바로가기만 유지)
 with st.sidebar:
     st.title("🤗💬 Auto Manager 🚗")
     st.subheader("현재 차량: 벤츠 S 클래스")
-    st.markdown("### 대화 이력")
-    for msg in st.session_state.messages[-5:]:
-        role = "나" if msg["role"] == "user" else "챗봇"
-        st.markdown(f"**{role}:** {msg['content'][:30]}...")
-    st.button("대화 초기화", on_click=clear_conversation)
+
     st.markdown("### 설정")
     user_language = st.selectbox("사용 언어를 선택하세요", ("한국어", "English", "Deutsch"))
     st.markdown(f"선택된 언어: **{user_language}**")
+
     st.markdown("### 바로가기")
     st.markdown("[메르세데스-벤츠 공식 홈페이지](https://www.mercedes-benz.co.kr/)")
 
@@ -84,7 +76,7 @@ def save_hash(hash_file, hash_value):
         f.write(hash_value)
 
 def index_data():
-    hash_file = "tes.json.hash"
+    hash_file = "test.json.hash"
     current_hash = get_file_hash("test.json")
     stored_hash = load_stored_hash(hash_file)
     
@@ -119,13 +111,10 @@ def index_data():
                 vectors.append((doc_id, embedding, metadata))
         index.upsert(vectors=vectors)
         save_hash(hash_file, current_hash)
-#        st.write("Pinecone에 새 데이터를 인덱싱했습니다.")
-#    else:
-#        st.write("test.json 파일에 변경이 없으므로, 기존 인덱스를 사용합니다.")
 
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
 pc = Pinecone(api_key=pinecone_api_key)
-index_name = "kcc-llm"
+index_name = "kcc-new"
 if index_name not in [idx.name for idx in pc.list_indexes()]:
     pc.create_index(
         name=index_name,
