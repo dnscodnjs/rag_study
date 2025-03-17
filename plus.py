@@ -32,7 +32,7 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-index_name = "kcc"
+index_name = "test"
 car_type = "EQS"
 IMAGE_PATTERN = r'(https?://\S+\.(?:png|jpg|jpeg|gif))'
 
@@ -108,12 +108,12 @@ def save_hash(hash_file, hash_value):
         f.write(hash_value)
 
 def index_data():
-    hash_file = "test.json.hash"
-    current_hash = get_file_hash("test.json")
+    hash_file = "usage.json.hash"
+    current_hash = get_file_hash("usage.json")
     stored_hash = load_stored_hash(hash_file)
     
     if stored_hash != current_hash:
-        json_file = "test.json"
+        json_file = "usage.json"
         with open(json_file, "r", encoding="utf-8") as f:
             test_data = json.load(f)
 
@@ -132,10 +132,13 @@ def index_data():
                         sub_title = sub.get("title", "")
                         contents = sub.get("contents", [])
 
-                        for content in contents:
-                            if content.lower().endswith(('.jpeg', '.jpg', '.png', '.gif')):
-                                image_paths.append(content)
-
+                        # (1) 추가: images 필드 내부에 있는 이미지 찾기
+                        sub_images = sub.get("images", [])
+                        for img in sub_images:
+                            if img.lower().endswith(('.jpeg', '.jpg', '.png', '.gif')):
+                                image_paths.append(img)
+                        
+                        # (2) 이미지를 제외한 텍스트만 page_content에 누적
                         non_image_contents = [c for c in contents if not c.lower().endswith(('.jpeg', '.jpg', '.png', '.gif'))]
                         content_text += "\n" + sub_title + "\n" + "\n".join(non_image_contents)
 
@@ -185,6 +188,7 @@ def retrieve_search_node(state: MessagesState) -> Command:
             "- Feature Summary and Key Points\n\n"
             "{{상세 설명}}\n"
             "- Detailed description of features\n\n"
+            "Please do not remove or alter any image URL. If there is an image URL provided in the text, you must include it verbatim in your final answer."
         )
     )
     result = retrieve_search_agent.invoke(state)
