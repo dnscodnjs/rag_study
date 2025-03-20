@@ -39,7 +39,7 @@ IMAGE_PATTERN = r'(https?://\S+\.(?:png|jpg|jpeg|gif))'
 embedding = OpenAIEmbeddings(model="text-embedding-3-large")  # 예: text-embedding-ada-002
 database = PineconeVectorStore(index_name=index_name, embedding=embedding)
 retriever = database.as_retriever(search_kwargs={"k": 3})
-llm = ChatOpenAI(model='gpt-3.5-turbo')
+llm = ChatOpenAI(model='gpt-4o')
 
 st.set_page_config(page_title="KCC Auto Manager", layout="wide")
 st.title("KCC Auto Manager")
@@ -131,22 +131,17 @@ def index_data():
                         sub_title = sub.get("title", "")
                         contents = sub.get("contents", [])
 
-                        # 기존 contents 안의 이미지도 검색
                         for content in contents:
                             if content.lower().endswith(('.jpeg', '.jpg', '.png', '.gif')):
                                 image_paths.append(content)
 
-                        # images 키에 들어있는 이미지도 함께 추가
+                        # ② images 키에 들어있는 이미지도 함께 추가
                         images = sub.get("images", [])
                         for img_url in images:
-                            if isinstance(img_url, str):
-                                image_paths.append(img_url)
+                            # 혹은 if img_url.lower().endswith(...) 체크 가능
+                            image_paths.append(img_url)
 
-                        # 이미지가 아닌 텍스트만 추가
-                        non_image_contents = [
-                            c for c in contents 
-                            if not c.lower().endswith(('.jpeg', '.jpg', '.png', '.gif'))
-                        ]
+                        non_image_contents = [c for c in contents if not c.lower().endswith(('.jpeg', '.jpg', '.png', '.gif'))]
                         content_text += "\n" + sub_title + "\n" + "\n".join(non_image_contents)
 
                     metadata = {
@@ -187,8 +182,7 @@ def retrieve_search_node(state: MessagesState) -> Command:
         tools=[vector_retrieve_tool],
         state_modifier = (
             "You are an expert on Mercedes Benz " + car_type + " car manuals."
-            "Please consider the information you provided and reply. Please provide facts, not opinions. "
-            "You must translate the answers into Korean and print them out."
+            "Please consider the information you provided and reply. Please provide facts, not opinions. You must translate the answers into Korean and print them out."
             "Please refer to the structure below to organize the website information:\n\n"
             "{{제목}}\n"
             "Example: Mercedes Benz EQS: Driver Display Charge Status Window Function\n\n"
@@ -217,13 +211,14 @@ def retrieve_search_node(state: MessagesState) -> Command:
                 displayed_image = image_paths[0]
                 break
 
-    # 이미지 URL을 답변 텍스트에 추가하는 코드를 주석 처리하여 중복 방지
-    state["retrieve_result"] = (displayed_image or "") + '\n\n' + state["retrieve_result"] + "\n"
-
+    # retrieval 결과 앞에 이미지 링크(존재할 경우) 추가
+    #state["retrieve_result"] = (displayed_image or "") + '\n\n' + state["retrieve_result"] + "\n"
+    
     state.setdefault("messages", []).append(
         HumanMessage(content=state["retrieve_result"], name="retrieve_search")
     )
     return Command(update={'messages': state["messages"]})
+
 
 def evaluate_node(state: MessagesState) -> Command[Literal['web_search', END]]:
     if state["messages"][-1].content is None:
@@ -246,6 +241,7 @@ def evaluate_node(state: MessagesState) -> Command[Literal['web_search', END]]:
     else:
           return Command(goto=END)
 
+
 def web_search_node(state: MessagesState) -> Command:
     tavily_search_tool = TavilySearchResults(
         max_results=5,
@@ -267,7 +263,7 @@ def web_search_node(state: MessagesState) -> Command:
             "### {{주요 정보}}\n"
             "- Feature Summary and Key Points\n\n"
             "### {{상세 설명}}\n"
-            "- Detailed description of the feature. / {{출처}}: please repply real website link\n\n"
+            "- Detailed description of the feature. / {{출처}}: real website link\n\n"
             "Please translate the answer into Korean, separate each item into separate lines and print it out in a good way."
         )
     )
@@ -278,6 +274,7 @@ def web_search_node(state: MessagesState) -> Command:
         HumanMessage(content=state["web_result"], name="web_search")
     )
     return Command(update={'messages': state["messages"]})
+
 
 # 그래프 구성
 graph_builder = StateGraph(MessagesState)
@@ -300,6 +297,7 @@ def ask_lang_graph_agent(query):
 # ==========================================
 # 사용자 입력 및 처리
 # ==========================================
+# st.chat_input에 별도 key를 두지 않고, 매번 동일 key로 사용
 user_prompt = st.chat_input("메시지를 입력하세요")
 
 with st.expander("음성 입력 및 이미지 첨부 열기"):
@@ -324,7 +322,7 @@ if user_prompt or uploaded_image:
     if uploaded_image:
         st.image(uploaded_image, width=150, caption="첨부된 이미지")
 
-    # 사용자 질문(텍스트)을 대화 기록에 저장
+    # 사용자 질문을 대화 기록에 저장 (텍스트만)
     st.session_state.messages.append({"role": "user", "content": combined_prompt})
     
     # lang_graph 기반 챗봇 Agent 실행
@@ -334,7 +332,7 @@ if user_prompt or uploaded_image:
     # 최종 답변 추출
     assistant_response = response["messages"][-1].content
 
-    # 이미지 링크 검색 (정규표현식)
+    # 이미지 링크 검색
     match = re.search(IMAGE_PATTERN, assistant_response, flags=re.IGNORECASE)
     related_image = None
     if match:
@@ -357,7 +355,7 @@ if user_prompt or uploaded_image:
     else:
         tts_audio_b64 = None
 
-    # 대화 기록에 assistant 응답 추가
+    # 대화 기록에 추가
     assistant_message = {
         "role": "assistant",
         "content": assistant_response,
@@ -382,7 +380,6 @@ for message in st.session_state.messages:
             )
 
         st.markdown(message["content"])
-        
         # assistant 메시지에 TTS가 저장되어 있으면 base64 디코딩 후 오디오 출력
         if message["role"] == "assistant" and message.get("tts"):
             audio_bytes = base64.b64decode(message["tts"])
